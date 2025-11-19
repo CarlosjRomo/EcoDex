@@ -5,7 +5,6 @@ const ORIGIN = window.location.origin
 
 async function fetchJson(path, params = {}) {
   const url = new URL(API_BASE_PATH + path, ORIGIN)
-  // Resultado: http://localhost:5173/trefle/api/v1 + path
 
   Object.entries(params).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== '') {
@@ -26,6 +25,7 @@ export function listSpecies(page = 1) {
   return fetchJson('/species', { page })
 }
 
+// 🔍 Buscar especies por texto
 export function searchSpecies(q, page = 1) {
   return fetchJson('/species/search', { q, page })
 }

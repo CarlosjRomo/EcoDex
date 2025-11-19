@@ -1,10 +1,8 @@
-
 <script setup>
-
 import { ref, onMounted } from 'vue'
-import { listSpecies } from './api/trefle'
+import { listSpecies, searchSpecies } from './api/trefle'
 
-const MAX_PAGES = 7 // limite de paginas que se pueden cargar
+const MAX_PAGES = 5 // limite de paginas en modo exploracion
 
 const species = ref([])
 const loading = ref(false)
@@ -12,13 +10,22 @@ const error = ref(null)
 const page = ref(1)
 const hasMore = ref(true)
 
-async function loadPage(p) {
+// estado del buscador
+const query = ref('')
+const isSearching = ref(false)
+
+async function loadBrowsePage(p) {
+  // no pasarnos del maximo
+  if (p > MAX_PAGES) {
+    hasMore.value = false
+    return
+  }
+
   loading.value = true
   error.value = null
   try {
     const res = await listSpecies(p)
 
-    // solo plantas "mas conocidas": con nombre comun e imagen
     const cleaned = res.data.filter(
       (plant) => plant.common_name && plant.image_url
     )
@@ -29,7 +36,6 @@ async function loadPage(p) {
       species.value = [...species.value, ...cleaned]
     }
 
-    // si ya no hay next O llegamos al limite de paginas, apagamos "cargar mas"
     if (!res.links || !res.links.next || p >= MAX_PAGES) {
       hasMore.value = false
     }
@@ -40,14 +46,79 @@ async function loadPage(p) {
   }
 }
 
+async function loadSearchPage(p) {
+  const q = query.value.trim()
+  if (!q) {
+    return
+  }
+
+  loading.value = true
+  error.value = null
+  try {
+    const res = await searchSpecies(q, p)
+
+    const cleaned = res.data.filter(
+      (plant) => plant.common_name && plant.image_url
+    )
+
+    if (p === 1) {
+      species.value = cleaned
+    } else {
+      species.value = [...species.value, ...cleaned]
+    }
+
+    if (!res.links || !res.links.next) {
+      hasMore.value = false
+    }
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    loading.value = false
+  }
+}
+
 onMounted(() => {
-  loadPage(page.value)
+  loadBrowsePage(page.value)
 })
 
 async function loadMore() {
   if (loading.value || !hasMore.value) return
   page.value += 1
-  await loadPage(page.value)
+
+  if (isSearching.value) {
+    await loadSearchPage(page.value)
+  } else {
+    await loadBrowsePage(page.value)
+  }
+}
+
+async function handleSearch() {
+  const q = query.value.trim()
+
+  // si queda vacio el input, regresamos a modo exploracion
+  if (!q) {
+    if (isSearching.value) {
+      isSearching.value = false
+      page.value = 1
+      hasMore.value = true
+      await loadBrowsePage(page.value)
+    }
+    return
+  }
+
+  isSearching.value = true
+  page.value = 1
+  hasMore.value = true
+  await loadSearchPage(page.value)
+}
+
+async function clearSearch() {
+  query.value = ''
+  isSearching.value = false
+  page.value = 1
+  hasMore.value = true
+  error.value = null
+  await loadBrowsePage(page.value)
 }
 </script>
 
@@ -59,6 +130,32 @@ async function loadMore() {
     </header>
 
     <main class="main">
+      <!-- 🔍 BUSCADOR -->
+      <section class="search-bar">
+        <input
+          v-model="query"
+          type="text"
+          class="search-input"
+          placeholder="Buscar por nombre común o científico..."
+          @keyup.enter="handleSearch"
+        />
+        <button
+          class="search-button"
+          @click="handleSearch"
+          :disabled="loading"
+        >
+          Buscar
+        </button>
+        <button
+          v-if="isSearching"
+          class="clear-button"
+          @click="clearSearch"
+          :disabled="loading"
+        >
+          Limpiar
+        </button>
+      </section>
+
       <p v-if="error" class="error">Error: {{ error }}</p>
 
       <section class="grid">
@@ -95,7 +192,7 @@ async function loadMore() {
           @click="loadMore"
           :disabled="loading"
         >
-          {{ loading ? 'Cargando...' : 'Cargar más plantas' }}
+          {{ loading ? 'Cargando...' : (isSearching ? 'Cargar más resultados' : 'Cargar más plantas') }}
         </button>
 
         <p v-else class="no-more">
@@ -136,6 +233,64 @@ async function loadMore() {
 .main {
   max-width: 1100px;
   margin: 0 auto;
+}
+
+/* 🔍 estilos del buscador */
+.search-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-bottom: 1.5rem;
+}
+
+.search-input {
+  flex: 1 1 240px;
+  max-width: 420px;
+  padding: 0.6rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #181818;
+  color: #f5f5f5;
+  outline: none;
+}
+
+.search-input::placeholder {
+  color: #6b7280;
+  font-size: 0.9rem;
+}
+
+.search-button,
+.clear-button {
+  padding: 0.6rem 1.2rem;
+  border-radius: 999px;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: transform 0.1s ease, box-shadow 0.1s ease, background 0.1s ease;
+}
+
+.search-button {
+  background: #22c55e;
+  color: #111;
+}
+
+.search-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(34, 197, 94, 0.35);
+  background: #16a34a;
+}
+
+.clear-button {
+  background: #374151;
+  color: #e5e7eb;
+}
+
+.clear-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.6);
+  background: #4b5563;
 }
 
 .error {
