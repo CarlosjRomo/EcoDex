@@ -1,5 +1,4 @@
 const TOKEN = import.meta.env.VITE_TREFLE_TOKEN
-
 const API_BASE_PATH = '/trefle/api/v1'
 const ORIGIN = window.location.origin
 
@@ -25,7 +24,6 @@ export function listSpecies(page = 1) {
   return fetchJson('/species', { page })
 }
 
-// 🔍 Buscar especies por texto
 export function searchSpecies(q, page = 1) {
   return fetchJson('/species/search', { q, page })
 }

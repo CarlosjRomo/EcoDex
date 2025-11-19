@@ -1,9 +1,11 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { listSpecies, searchSpecies } from './api/trefle'
+import { listSpecies, searchSpecies, getSpecies } from './api/trefle'
 
-const MAX_PAGES = 5 // limite de paginas en modo exploracion
+// límite de páginas en modo exploración
+const MAX_PAGES = 5
 
+// listado principal
 const species = ref([])
 const loading = ref(false)
 const error = ref(null)
@@ -14,8 +16,12 @@ const hasMore = ref(true)
 const query = ref('')
 const isSearching = ref(false)
 
+// estado de detalles
+const selectedPlant = ref(null)
+const detailsLoading = ref(false)
+const detailsError = ref(null)
+
 async function loadBrowsePage(p) {
-  // no pasarnos del maximo
   if (p > MAX_PAGES) {
     hasMore.value = false
     return
@@ -48,9 +54,7 @@ async function loadBrowsePage(p) {
 
 async function loadSearchPage(p) {
   const q = query.value.trim()
-  if (!q) {
-    return
-  }
+  if (!q) return
 
   loading.value = true
   error.value = null
@@ -95,8 +99,8 @@ async function loadMore() {
 async function handleSearch() {
   const q = query.value.trim()
 
-  // si queda vacio el input, regresamos a modo exploracion
   if (!q) {
+    // si limpian el input, regresamos a modo exploración
     if (isSearching.value) {
       isSearching.value = false
       page.value = 1
@@ -120,6 +124,29 @@ async function clearSearch() {
   error.value = null
   await loadBrowsePage(page.value)
 }
+
+// ---------- Detalles ----------
+
+async function openDetails(plant) {
+  detailsLoading.value = true
+  detailsError.value = null
+  selectedPlant.value = null
+
+  try {
+    const res = await getSpecies(plant.id)
+    // la API de Trefle regresa { data: {...} }
+    selectedPlant.value = res.data
+  } catch (e) {
+    detailsError.value = e.message
+  } finally {
+    detailsLoading.value = false
+  }
+}
+
+function closeDetails() {
+  selectedPlant.value = null
+  detailsError.value = null
+}
 </script>
 
 <template>
@@ -129,33 +156,36 @@ async function clearSearch() {
       <h1 class="title">EcoDex - Plantas</h1>
     </header>
 
-    <main class="main">
-      <!-- 🔍 BUSCADOR -->
-      <section class="search-bar">
-        <input
-          v-model="query"
-          type="text"
-          class="search-input"
-          placeholder="Buscar por nombre común o científico..."
-          @keyup.enter="handleSearch"
-        />
-        <button
-          class="search-button"
-          @click="handleSearch"
-          :disabled="loading"
-        >
-          Buscar
-        </button>
-        <button
-          v-if="isSearching"
-          class="clear-button"
-          @click="clearSearch"
-          :disabled="loading"
-        >
-          Limpiar
-        </button>
-      </section>
+    <!-- BUSCADOR -->
+    <section class="search-bar">
+      <input
+        v-model="query"
+        type="text"
+        placeholder="Buscar por nombre común o científico..."
+        @keyup.enter="handleSearch"
+      />
+      <button
+        class="btn primary"
+        @click="handleSearch"
+        :disabled="loading"
+      >
+        {{ loading && isSearching ? 'Buscando...' : 'Buscar' }}
+      </button>
+      <button
+        v-if="isSearching || query"
+        class="btn secondary"
+        @click="clearSearch"
+        :disabled="loading"
+      >
+        Limpiar
+      </button>
+    </section>
 
+    <p class="mode-label">
+      {{ isSearching ? 'Mostrando resultados de búsqueda' : 'Explorando especies populares' }}
+    </p>
+
+    <main class="main">
       <p v-if="error" class="error">Error: {{ error }}</p>
 
       <section class="grid">
@@ -163,6 +193,7 @@ async function clearSearch() {
           v-for="p in species"
           :key="p.id"
           class="card"
+          @click="openDetails(p)"
         >
           <div class="image-wrapper" v-if="p.image_url">
             <img
@@ -192,7 +223,7 @@ async function clearSearch() {
           @click="loadMore"
           :disabled="loading"
         >
-          {{ loading ? 'Cargando...' : (isSearching ? 'Cargar más resultados' : 'Cargar más plantas') }}
+          {{ loading ? 'Cargando...' : 'Cargar más plantas' }}
         </button>
 
         <p v-else class="no-more">
@@ -200,6 +231,58 @@ async function clearSearch() {
         </p>
       </div>
     </main>
+
+    <!-- MODAL DE DETALLES -->
+    <div
+      v-if="detailsLoading || detailsError || selectedPlant"
+      class="backdrop"
+      @click.self="closeDetails"
+    >
+      <div class="modal">
+        <button class="close-btn" @click="closeDetails">✕</button>
+
+        <p v-if="detailsLoading" class="details-loading">
+          Cargando detalles...
+        </p>
+
+        <p v-else-if="detailsError" class="error">
+          Error al cargar detalles: {{ detailsError }}
+        </p>
+
+        <div v-else-if="selectedPlant" class="details">
+          <div class="details-header">
+            <h2>{{ selectedPlant.common_name || 'Sin nombre común' }}</h2>
+            <p class="details-sci">
+              {{ selectedPlant.scientific_name }}
+            </p>
+          </div>
+
+          <div class="details-body">
+            <div class="details-image" v-if="selectedPlant.image_url">
+              <img :src="selectedPlant.image_url" :alt="selectedPlant.scientific_name" />
+            </div>
+
+            <ul class="details-info">
+              <li v-if="selectedPlant.family">
+                <strong>Familia:</strong> {{ selectedPlant.family }}
+              </li>
+              <li v-if="selectedPlant.genus">
+                <strong>Género:</strong> {{ selectedPlant.genus }}
+              </li>
+              <li v-if="selectedPlant.year">
+                <strong>Año de descripción:</strong> {{ selectedPlant.year }}
+              </li>
+              <li v-if="selectedPlant.author">
+                <strong>Autor:</strong> {{ selectedPlant.author }}
+              </li>
+              <li v-if="selectedPlant.status">
+                <strong>Estatus:</strong> {{ selectedPlant.status }}
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -217,7 +300,7 @@ async function clearSearch() {
   align-items: center;
   justify-content: center;
   gap: 0.75rem;
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
 }
 
 .logo {
@@ -230,67 +313,74 @@ async function clearSearch() {
   letter-spacing: 0.08em;
 }
 
-.main {
-  max-width: 1100px;
-  margin: 0 auto;
-}
-
-/* 🔍 estilos del buscador */
+/* BUSCADOR */
 .search-bar {
+  max-width: 600px;
+  margin: 0 auto 0.5rem;
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  justify-content: center;
-  margin-bottom: 1.5rem;
+  gap: 0.5rem;
 }
 
-.search-input {
-  flex: 1 1 240px;
-  max-width: 420px;
-  padding: 0.6rem 0.9rem;
+.search-bar input {
+  flex: 1;
+  padding: 0.55rem 0.75rem;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: #181818;
-  color: #f5f5f5;
+  border: 1px solid #27272a;
+  background: #18181b;
+  color: #f9fafb;
   outline: none;
 }
 
-.search-input::placeholder {
+.search-bar input::placeholder {
   color: #6b7280;
-  font-size: 0.9rem;
 }
 
-.search-button,
-.clear-button {
-  padding: 0.6rem 1.2rem;
+.btn {
+  padding: 0.55rem 1rem;
   border-radius: 999px;
   border: none;
+  font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
-  font-size: 0.9rem;
   transition: transform 0.1s ease, box-shadow 0.1s ease, background 0.1s ease;
 }
 
-.search-button {
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.btn.primary {
   background: #22c55e;
-  color: #111;
+  color: #111827;
 }
 
-.search-button:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(34, 197, 94, 0.35);
+.btn.primary:hover:not(:disabled) {
   background: #16a34a;
+  box-shadow: 0 8px 20px rgba(34, 197, 94, 0.35);
+  transform: translateY(-1px);
 }
 
-.clear-button {
-  background: #374151;
+.btn.secondary {
+  background: #27272a;
   color: #e5e7eb;
 }
 
-.clear-button:hover:not(:disabled) {
+.btn.secondary:hover:not(:disabled) {
+  background: #3f3f46;
   transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.6);
-  background: #4b5563;
+}
+
+.mode-label {
+  text-align: center;
+  font-size: 0.9rem;
+  color: #9ca3af;
+  margin-bottom: 1.25rem;
+}
+
+.main {
+  max-width: 1100px;
+  margin: 0 auto;
 }
 
 .error {
@@ -316,6 +406,14 @@ async function clearSearch() {
   text-align: center;
   gap: 0.5rem;
   border: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 35px rgba(0, 0, 0, 0.55);
+  border-color: rgba(34, 197, 94, 0.5);
 }
 
 .image-wrapper {
@@ -377,5 +475,100 @@ async function clearSearch() {
 
 .no-more {
   color: #9ca3af;
+}
+
+/* MODAL DETALLES */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 1.5rem;
+  z-index: 50;
+}
+
+.modal {
+  position: relative;
+  background: #020617;
+  border-radius: 1.25rem;
+  padding: 1.5rem;
+  max-width: 700px;
+  width: 100%;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+}
+
+.close-btn {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  background: transparent;
+  border: none;
+  color: #9ca3af;
+  font-size: 1.25rem;
+  cursor: pointer;
+}
+
+.close-btn:hover {
+  color: #e5e7eb;
+}
+
+.details-loading {
+  text-align: center;
+  color: #e5e7eb;
+}
+
+.details-header h2 {
+  font-size: 1.4rem;
+  margin-bottom: 0.25rem;
+}
+
+.details-sci {
+  font-size: 0.95rem;
+  color: #9ca3af;
+}
+
+.details-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.details-image {
+  flex: 1 1 220px;
+}
+
+.details-image img {
+  width: 100%;
+  border-radius: 0.75rem;
+  object-fit: cover;
+}
+
+.details-info {
+  flex: 1 1 220px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.details-info strong {
+  color: #e5e7eb;
+}
+
+@media (max-width: 640px) {
+  .search-bar {
+    flex-direction: column;
+  }
+
+  .search-bar .btn {
+    width: 100%;
+  }
 }
 </style>
