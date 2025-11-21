@@ -1,9 +1,10 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { listSpecies, searchSpecies, getSpecies } from './api/trefle'
 
 // límite de páginas en modo exploración
 const MAX_PAGES = 5
+const FAVORITES_KEY = 'ecodex_favorites'
 
 // listado principal
 const species = ref([])
@@ -16,63 +17,70 @@ const hasMore = ref(true)
 const query = ref('')
 const isSearching = ref(false)
 
+// mostrar solo favoritos
+const showFavoritesOnly = ref(false)
+
 // estado de detalles
 const selectedPlant = ref(null)
 const detailsLoading = ref(false)
 const detailsError = ref(null)
 
-// favoritos (guardados en localStorage)
-const favorites = ref([])
+// favoritos
+const favoriteIds = ref(new Set())
+const favoritePlants = ref([])
 
-// ---------- Favoritos: helpers ----------
-
-const FAVORITES_KEY = 'ecodex_favorites'
-
-function loadFavorites() {
+// -------- helpers favoritos --------
+function loadFavoritesFromStorage() {
   try {
     const raw = localStorage.getItem(FAVORITES_KEY)
-    if (!raw) {
-      favorites.value = []
-      return
+    if (!raw) return
+    const arr = JSON.parse(raw)
+    if (Array.isArray(arr)) {
+      favoritePlants.value = arr
+      favoriteIds.value = new Set(arr.map(p => p.id))
     }
-    const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed)) {
-      favorites.value = parsed
-    } else {
-      favorites.value = []
-    }
-  } catch {
-    favorites.value = []
+  } catch (e) {
+    console.warn('Error leyendo favoritos de localStorage', e)
   }
 }
 
-function saveFavorites() {
-  localStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites.value))
+function saveFavoritesToStorage() {
+  try {
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify(favoritePlants.value))
+  } catch (e) {
+    console.warn('Error guardando favoritos en localStorage', e)
+  }
 }
 
-function isFavorite(id) {
-  return favorites.value.some((p) => p.id === id)
+function isFavorite(plant) {
+  if (!plant || plant.id == null) return false
+  return favoriteIds.value.has(plant.id)
 }
 
 function toggleFavorite(plant) {
-  const idx = favorites.value.findIndex((p) => p.id === plant.id)
-  if (idx !== -1) {
-    // quitar de favoritos
-    favorites.value.splice(idx, 1)
+  if (!plant || plant.id == null) return
+
+  if (favoriteIds.value.has(plant.id)) {
+    // quitar
+    favoriteIds.value.delete(plant.id)
+    favoritePlants.value = favoritePlants.value.filter(p => p.id !== plant.id)
   } else {
-    // agregar con info básica
-    favorites.value.push({
-      id: plant.id,
-      scientific_name: plant.scientific_name,
-      common_name: plant.common_name,
-      family: plant.family,
-      image_url: plant.image_url,
-    })
+    // agregar
+    favoriteIds.value.add(plant.id)
+    const idx = favoritePlants.value.findIndex(p => p.id === plant.id)
+    if (idx === -1) {
+      favoritePlants.value.push(plant)
+    }
   }
-  saveFavorites()
+  saveFavoritesToStorage()
 }
 
-// ---------- Carga de especies ----------
+// lista que realmente se muestra en el grid
+const visibleSpecies = computed(() =>
+  showFavoritesOnly.value ? favoritePlants.value : species.value
+)
+
+// ---------- carga de datos (explorar / buscar) ----------
 
 async function loadBrowsePage(p) {
   if (p > MAX_PAGES) {
@@ -135,7 +143,7 @@ async function loadSearchPage(p) {
 }
 
 onMounted(() => {
-  loadFavorites()
+  loadFavoritesFromStorage()
   loadBrowsePage(page.value)
 })
 
@@ -164,6 +172,9 @@ async function handleSearch() {
     return
   }
 
+  // si el usuario busca, salimos de modo favoritos
+  showFavoritesOnly.value = false
+
   isSearching.value = true
   page.value = 1
   hasMore.value = true
@@ -179,6 +190,20 @@ async function clearSearch() {
   await loadBrowsePage(page.value)
 }
 
+// cambiar entre vista normal y solo favoritos
+function toggleFavoritesView() {
+  if (showFavoritesOnly.value) {
+    // regresar a todas
+    showFavoritesOnly.value = false
+  } else {
+    // mostrar solo favoritos
+    showFavoritesOnly.value = true
+    isSearching.value = false
+    query.value = ''
+    error.value = null
+  }
+}
+
 // ---------- Detalles ----------
 
 async function openDetails(plant) {
@@ -188,7 +213,6 @@ async function openDetails(plant) {
 
   try {
     const res = await getSpecies(plant.id)
-    // la API de Trefle regresa { data: {...} }
     selectedPlant.value = res.data
   } catch (e) {
     detailsError.value = e.message
@@ -210,7 +234,7 @@ function closeDetails() {
       <h1 class="title">EcoDex - Plantas</h1>
     </header>
 
-    <!-- BUSCADOR -->
+    <!-- BUSCADOR + BOTÓN FAVORITOS -->
     <section class="search-bar">
       <input
         v-model="query"
@@ -233,26 +257,56 @@ function closeDetails() {
       >
         Limpiar
       </button>
+
+      <button
+        class="btn tertiary"
+        @click="toggleFavoritesView"
+        :disabled="loading && !showFavoritesOnly"
+      >
+        {{
+          showFavoritesOnly
+            ? 'Ver todas las plantas'
+            : `Ver favoritos (${favoritePlants.length})`
+        }}
+      </button>
     </section>
 
     <p class="mode-label">
-      {{ isSearching ? 'Mostrando resultados de búsqueda' : 'Explorando especies populares' }}
+      {{
+        showFavoritesOnly
+          ? 'Mostrando tus plantas favoritas'
+          : isSearching
+            ? 'Mostrando resultados de búsqueda'
+            : 'Explorando especies populares'
+      }}
     </p>
 
     <main class="main">
       <p v-if="error" class="error">Error: {{ error }}</p>
 
-      <!-- GRID PRINCIPAL -->
+      <p
+        v-if="showFavoritesOnly && favoritePlants.length === 0"
+        class="empty-favs"
+      >
+        Todavía no tienes plantas en favoritos. Marca alguna con la ⭐.
+      </p>
+
       <section class="grid">
         <article
-          v-for="p in species"
+          v-for="p in visibleSpecies"
           :key="p.id"
           class="card"
           @click="openDetails(p)"
         >
-          <div class="favorite-badge" @click.stop="toggleFavorite(p)">
-            {{ isFavorite(p.id) ? '★' : '☆' }}
-          </div>
+          <!-- botón estrella en la card -->
+          <button
+            class="favorite-toggle"
+            @click.stop="toggleFavorite(p)"
+            :aria-pressed="isFavorite(p)"
+          >
+            <span v-if="isFavorite(p)">★</span>
+            <span v-else>☆</span>
+          </button>
 
           <div class="image-wrapper" v-if="p.image_url">
             <img
@@ -277,7 +331,7 @@ function closeDetails() {
 
       <div class="actions">
         <button
-          v-if="hasMore"
+          v-if="!showFavoritesOnly && hasMore"
           class="load-more"
           @click="loadMore"
           :disabled="loading"
@@ -285,49 +339,10 @@ function closeDetails() {
           {{ loading ? 'Cargando...' : 'Cargar más plantas' }}
         </button>
 
-        <p v-else class="no-more">
+        <p v-else-if="!showFavoritesOnly" class="no-more">
           No hay más resultados.
         </p>
       </div>
-
-      <!-- SECCIÓN DE FAVORITAS -->
-      <section v-if="favorites.length" class="favorites-section">
-        <h2 class="favorites-title">
-          Mis plantas favoritas ({{ favorites.length }})
-        </h2>
-
-        <div class="grid">
-          <article
-            v-for="p in favorites"
-            :key="'fav-' + p.id"
-            class="card"
-            @click="openDetails(p)"
-          >
-            <div class="favorite-badge" @click.stop="toggleFavorite(p)">
-              {{ isFavorite(p.id) ? '★' : '☆' }}
-            </div>
-
-            <div class="image-wrapper" v-if="p.image_url">
-              <img
-                :src="p.image_url"
-                :alt="p.scientific_name"
-              />
-            </div>
-
-            <h2 class="sci-name">
-              {{ p.scientific_name }}
-            </h2>
-
-            <p class="common-name">
-              {{ p.common_name || 'Sin nombre común' }}
-            </p>
-
-            <p v-if="p.family" class="family">
-              {{ p.family }}
-            </p>
-          </article>
-        </div>
-      </section>
     </main>
 
     <!-- MODAL DE DETALLES -->
@@ -377,12 +392,14 @@ function closeDetails() {
                 <strong>Estatus:</strong> {{ selectedPlant.status }}
               </li>
             </ul>
+          </div>
 
+          <div class="details-footer">
             <button
-              class="fav-btn-modal"
+              class="fav-btn"
               @click="toggleFavorite(selectedPlant)"
             >
-              {{ isFavorite(selectedPlant.id) ? 'Quitar de favoritos' : 'Agregar a favoritos' }}
+              {{ isFavorite(selectedPlant) ? 'Quitar de favoritos' : 'Agregar a favoritos' }}
             </button>
           </div>
         </div>
@@ -420,14 +437,15 @@ function closeDetails() {
 
 /* BUSCADOR */
 .search-bar {
-  max-width: 600px;
+  max-width: 800px;
   margin: 0 auto 0.5rem;
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
 .search-bar input {
-  flex: 1;
+  flex: 1 1 200px;
   padding: 0.55rem 0.75rem;
   border-radius: 999px;
   border: 1px solid #27272a;
@@ -476,6 +494,17 @@ function closeDetails() {
   transform: translateY(-1px);
 }
 
+.btn.tertiary {
+  background: transparent;
+  color: #e5e7eb;
+  border: 1px solid #3f3f46;
+}
+
+.btn.tertiary:hover:not(:disabled) {
+  background: #18181b;
+  transform: translateY(-1px);
+}
+
 .mode-label {
   text-align: center;
   font-size: 0.9rem;
@@ -494,6 +523,12 @@ function closeDetails() {
   margin-bottom: 1rem;
 }
 
+.empty-favs {
+  text-align: center;
+  color: #9ca3af;
+  margin-bottom: 1rem;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -501,7 +536,6 @@ function closeDetails() {
 }
 
 .card {
-  position: relative;
   background: #1b1b1b;
   border-radius: 1rem;
   padding: 1rem;
@@ -514,12 +548,38 @@ function closeDetails() {
   border: 1px solid rgba(255, 255, 255, 0.05);
   cursor: pointer;
   transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+  position: relative;
 }
 
 .card:hover {
   transform: translateY(-2px);
   box-shadow: 0 16px 35px rgba(0, 0, 0, 0.55);
   border-color: rgba(34, 197, 94, 0.5);
+}
+
+.favorite-toggle {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fbbf24;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.favorite-toggle span {
+  transform: translateY(-1px);
+}
+
+.favorite-toggle:hover {
+  background: rgba(15, 23, 42, 0.9);
 }
 
 .image-wrapper {
@@ -583,26 +643,6 @@ function closeDetails() {
   color: #9ca3af;
 }
 
-/* FAVORITOS */
-
-.favorite-badge {
-  position: absolute;
-  top: 0.6rem;
-  right: 0.7rem;
-  font-size: 1.1rem;
-  cursor: pointer;
-  user-select: none;
-}
-
-.favorites-section {
-  margin-top: 3rem;
-}
-
-.favorites-title {
-  font-size: 1.3rem;
-  margin-bottom: 1rem;
-}
-
 /* MODAL DETALLES */
 .backdrop {
   position: fixed;
@@ -624,6 +664,11 @@ function closeDetails() {
   width: 100%;
   box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8);
   border: 1px solid rgba(148, 163, 184, 0.4);
+
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .close-btn {
@@ -644,6 +689,13 @@ function closeDetails() {
 .details-loading {
   text-align: center;
   color: #e5e7eb;
+}
+
+/* la sección de detalles hace scroll */
+.details {
+  margin-top: 0.5rem;
+  overflow-y: auto;
+  padding-right: 0.5rem;
 }
 
 .details-header h2 {
@@ -677,7 +729,7 @@ function closeDetails() {
   flex: 1 1 220px;
   list-style: none;
   padding: 0;
-  margin: 0 0 1rem;
+  margin: 0;
   font-size: 0.9rem;
   display: flex;
   flex-direction: column;
@@ -688,19 +740,27 @@ function closeDetails() {
   color: #e5e7eb;
 }
 
-.fav-btn-modal {
-  padding: 0.55rem 1.1rem;
+.details-footer {
+  margin-top: 1.5rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.fav-btn {
+  padding: 0.6rem 1.4rem;
   border-radius: 999px;
   border: none;
   background: #22c55e;
   color: #111827;
   font-weight: 600;
   cursor: pointer;
-  font-size: 0.9rem;
+  transition: background 0.1s ease, box-shadow 0.1s ease, transform 0.1s ease;
 }
 
-.fav-btn-modal:hover {
+.fav-btn:hover {
   background: #16a34a;
+  box-shadow: 0 10px 25px rgba(34, 197, 94, 0.4);
+  transform: translateY(-1px);
 }
 
 @media (max-width: 640px) {
@@ -710,6 +770,14 @@ function closeDetails() {
 
   .search-bar .btn {
     width: 100%;
+  }
+
+  .details-body {
+    flex-direction: column;
+  }
+
+  .details-footer {
+    justify-content: center;
   }
 }
 </style>
