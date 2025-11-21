@@ -21,6 +21,59 @@ const selectedPlant = ref(null)
 const detailsLoading = ref(false)
 const detailsError = ref(null)
 
+// favoritos (guardados en localStorage)
+const favorites = ref([])
+
+// ---------- Favoritos: helpers ----------
+
+const FAVORITES_KEY = 'ecodex_favorites'
+
+function loadFavorites() {
+  try {
+    const raw = localStorage.getItem(FAVORITES_KEY)
+    if (!raw) {
+      favorites.value = []
+      return
+    }
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) {
+      favorites.value = parsed
+    } else {
+      favorites.value = []
+    }
+  } catch {
+    favorites.value = []
+  }
+}
+
+function saveFavorites() {
+  localStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites.value))
+}
+
+function isFavorite(id) {
+  return favorites.value.some((p) => p.id === id)
+}
+
+function toggleFavorite(plant) {
+  const idx = favorites.value.findIndex((p) => p.id === plant.id)
+  if (idx !== -1) {
+    // quitar de favoritos
+    favorites.value.splice(idx, 1)
+  } else {
+    // agregar con info básica
+    favorites.value.push({
+      id: plant.id,
+      scientific_name: plant.scientific_name,
+      common_name: plant.common_name,
+      family: plant.family,
+      image_url: plant.image_url,
+    })
+  }
+  saveFavorites()
+}
+
+// ---------- Carga de especies ----------
+
 async function loadBrowsePage(p) {
   if (p > MAX_PAGES) {
     hasMore.value = false
@@ -82,6 +135,7 @@ async function loadSearchPage(p) {
 }
 
 onMounted(() => {
+  loadFavorites()
   loadBrowsePage(page.value)
 })
 
@@ -188,6 +242,7 @@ function closeDetails() {
     <main class="main">
       <p v-if="error" class="error">Error: {{ error }}</p>
 
+      <!-- GRID PRINCIPAL -->
       <section class="grid">
         <article
           v-for="p in species"
@@ -195,6 +250,10 @@ function closeDetails() {
           class="card"
           @click="openDetails(p)"
         >
+          <div class="favorite-badge" @click.stop="toggleFavorite(p)">
+            {{ isFavorite(p.id) ? '★' : '☆' }}
+          </div>
+
           <div class="image-wrapper" v-if="p.image_url">
             <img
               :src="p.image_url"
@@ -230,6 +289,45 @@ function closeDetails() {
           No hay más resultados.
         </p>
       </div>
+
+      <!-- SECCIÓN DE FAVORITAS -->
+      <section v-if="favorites.length" class="favorites-section">
+        <h2 class="favorites-title">
+          Mis plantas favoritas ({{ favorites.length }})
+        </h2>
+
+        <div class="grid">
+          <article
+            v-for="p in favorites"
+            :key="'fav-' + p.id"
+            class="card"
+            @click="openDetails(p)"
+          >
+            <div class="favorite-badge" @click.stop="toggleFavorite(p)">
+              {{ isFavorite(p.id) ? '★' : '☆' }}
+            </div>
+
+            <div class="image-wrapper" v-if="p.image_url">
+              <img
+                :src="p.image_url"
+                :alt="p.scientific_name"
+              />
+            </div>
+
+            <h2 class="sci-name">
+              {{ p.scientific_name }}
+            </h2>
+
+            <p class="common-name">
+              {{ p.common_name || 'Sin nombre común' }}
+            </p>
+
+            <p v-if="p.family" class="family">
+              {{ p.family }}
+            </p>
+          </article>
+        </div>
+      </section>
     </main>
 
     <!-- MODAL DE DETALLES -->
@@ -279,6 +377,13 @@ function closeDetails() {
                 <strong>Estatus:</strong> {{ selectedPlant.status }}
               </li>
             </ul>
+
+            <button
+              class="fav-btn-modal"
+              @click="toggleFavorite(selectedPlant)"
+            >
+              {{ isFavorite(selectedPlant.id) ? 'Quitar de favoritos' : 'Agregar a favoritos' }}
+            </button>
           </div>
         </div>
       </div>
@@ -396,6 +501,7 @@ function closeDetails() {
 }
 
 .card {
+  position: relative;
   background: #1b1b1b;
   border-radius: 1rem;
   padding: 1rem;
@@ -477,6 +583,26 @@ function closeDetails() {
   color: #9ca3af;
 }
 
+/* FAVORITOS */
+
+.favorite-badge {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.7rem;
+  font-size: 1.1rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.favorites-section {
+  margin-top: 3rem;
+}
+
+.favorites-title {
+  font-size: 1.3rem;
+  margin-bottom: 1rem;
+}
+
 /* MODAL DETALLES */
 .backdrop {
   position: fixed;
@@ -551,7 +677,7 @@ function closeDetails() {
   flex: 1 1 220px;
   list-style: none;
   padding: 0;
-  margin: 0;
+  margin: 0 0 1rem;
   font-size: 0.9rem;
   display: flex;
   flex-direction: column;
@@ -560,6 +686,21 @@ function closeDetails() {
 
 .details-info strong {
   color: #e5e7eb;
+}
+
+.fav-btn-modal {
+  padding: 0.55rem 1.1rem;
+  border-radius: 999px;
+  border: none;
+  background: #22c55e;
+  color: #111827;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.fav-btn-modal:hover {
+  background: #16a34a;
 }
 
 @media (max-width: 640px) {
