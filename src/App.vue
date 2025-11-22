@@ -2,9 +2,24 @@
 import { ref, onMounted, computed } from 'vue'
 import { listSpecies, searchSpecies, getSpecies } from './api/trefle'
 
+// Firebase / Firestore
+import { db } from './firebase'
+import {
+  collection,
+  doc,
+  onSnapshot,
+  setDoc,
+  deleteDoc
+} from 'firebase/firestore'
+
+// Auth helpers reutilizados de la Pokédex
+import { listenToAuthChanges, logoutUser } from './lib/auth'
+
+// Formulario de autenticación
+import AuthForm from './components/AuthForm.vue'
+
 // límite de páginas en modo exploración
 const MAX_PAGES = 5
-const FAVORITES_KEY = 'ecodex_favorites'
 
 // listado principal
 const species = ref([])
@@ -25,54 +40,55 @@ const selectedPlant = ref(null)
 const detailsLoading = ref(false)
 const detailsError = ref(null)
 
-// favoritos
+// favoritos (ahora sincronizados con Firestore)
 const favoriteIds = ref(new Set())
 const favoritePlants = ref([])
 
-// -------- helpers favoritos --------
-function loadFavoritesFromStorage() {
-  try {
-    const raw = localStorage.getItem(FAVORITES_KEY)
-    if (!raw) return
-    const arr = JSON.parse(raw)
-    if (Array.isArray(arr)) {
-      favoritePlants.value = arr
-      favoriteIds.value = new Set(arr.map(p => p.id))
-    }
-  } catch (e) {
-    console.warn('Error leyendo favoritos de localStorage', e)
-  }
-}
+// usuario actual de Firebase
+const user = ref(null)
 
-function saveFavoritesToStorage() {
-  try {
-    localStorage.setItem(FAVORITES_KEY, JSON.stringify(favoritePlants.value))
-  } catch (e) {
-    console.warn('Error guardando favoritos en localStorage', e)
-  }
-}
+// para desuscribirse de la colección de favoritos cuando cambie el usuario
+let favoritesUnsubscribe = null
 
+// -------- helpers favoritos (versión Firebase) --------
 function isFavorite(plant) {
   if (!plant || plant.id == null) return false
   return favoriteIds.value.has(plant.id)
 }
 
-function toggleFavorite(plant) {
+async function toggleFavorite(plant) {
   if (!plant || plant.id == null) return
 
-  if (favoriteIds.value.has(plant.id)) {
-    // quitar
-    favoriteIds.value.delete(plant.id)
-    favoritePlants.value = favoritePlants.value.filter(p => p.id !== plant.id)
-  } else {
-    // agregar
-    favoriteIds.value.add(plant.id)
-    const idx = favoritePlants.value.findIndex(p => p.id === plant.id)
-    if (idx === -1) {
-      favoritePlants.value.push(plant)
-    }
+  if (!user.value) {
+    alert('Debes iniciar sesión para guardar tus favoritos en la nube.')
+    return
   }
-  saveFavoritesToStorage()
+
+  const plantIdStr = String(plant.id)
+  const favRef = doc(db, 'users', user.value.uid, 'plantFavorites', plantIdStr)
+
+  const alreadyFav = favoriteIds.value.has(plant.id)
+
+  try {
+    if (alreadyFav) {
+      // quitar de favoritos
+      await deleteDoc(favRef)
+    } else {
+      // agregar a favoritos
+      await setDoc(favRef, {
+        common_name: plant.common_name ?? null,
+        scientific_name: plant.scientific_name ?? null,
+        image_url: plant.image_url ?? null,
+        family: plant.family ?? null,
+        addedAt: new Date()
+      })
+    }
+    // No actualizamos manualmente favoritePlants/favoriteIds:
+    // onSnapshot mantiene todo sincronizado.
+  } catch (e) {
+    console.error('Error al cambiar favorito', e)
+    alert('Ocurrió un error al actualizar tus favoritos.')
+  }
 }
 
 // lista que realmente se muestra en el grid
@@ -142,8 +158,54 @@ async function loadSearchPage(p) {
   }
 }
 
+// login/logout manejados por Firebase + helpers
+async function logout() {
+  try {
+    await logoutUser()
+  } catch (e) {
+    console.error('Error al cerrar sesión', e)
+  }
+}
+
 onMounted(() => {
-  loadFavoritesFromStorage()
+  // escuchar cambios en la sesión de Firebase (login/logout)
+  listenToAuthChanges((firebaseUser) => {
+    user.value = firebaseUser
+
+    // si ya había una suscripción de favoritos, la limpiamos
+    if (favoritesUnsubscribe) {
+      favoritesUnsubscribe()
+      favoritesUnsubscribe = null
+    }
+
+    if (firebaseUser) {
+      // escuchamos los favoritos de este usuario en Firestore
+      const favsRef = collection(db, 'users', firebaseUser.uid, 'plantFavorites')
+
+      favoritesUnsubscribe = onSnapshot(favsRef, (snapshot) => {
+        const arr = []
+        const ids = new Set()
+
+        snapshot.forEach((d) => {
+          const data = d.data()
+          const idNum = Number(d.id)
+          const id = Number.isNaN(idNum) ? d.id : idNum
+
+          arr.push({ id, ...data })
+          ids.add(id)
+        })
+
+        favoritePlants.value = arr
+        favoriteIds.value = ids
+      })
+    } else {
+      // sin usuario → sin favoritos
+      favoritePlants.value = []
+      favoriteIds.value = new Set()
+    }
+  })
+
+  // cargar la primera página de exploración
   loadBrowsePage(page.value)
 })
 
@@ -233,6 +295,27 @@ function closeDetails() {
       <span class="logo">🌱</span>
       <h1 class="title">EcoDex - Plantas</h1>
     </header>
+
+    <!-- BARRA DE USUARIO -->
+    <section class="user-bar">
+      <template v-if="user">
+        <span class="user-info">
+          Conectado como:
+          <strong>{{ user.displayName || user.email }}</strong>
+        </span>
+
+        <button
+          class="btn secondary"
+          @click="logout"
+        >
+          Cerrar sesión
+        </button>
+      </template>
+
+      <template v-else>
+        <AuthForm />
+      </template>
+    </section>
 
     <!-- BUSCADOR + BOTÓN FAVORITOS -->
     <section class="search-bar">
@@ -422,7 +505,7 @@ function closeDetails() {
   align-items: center;
   justify-content: center;
   gap: 0.75rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.75rem;
 }
 
 .logo {
@@ -433,6 +516,22 @@ function closeDetails() {
   font-size: 2.5rem;
   font-weight: 800;
   letter-spacing: 0.08em;
+}
+
+/* BARRA DE USUARIO */
+.user-bar {
+  max-width: 800px;
+  margin: 0 auto 0.75rem;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+  color: #e5e7eb;
+}
+
+.user-info strong {
+  color: #a5b4fc;
 }
 
 /* BUSCADOR */
@@ -770,6 +869,11 @@ function closeDetails() {
 
   .search-bar .btn {
     width: 100%;
+  }
+
+  .user-bar {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .details-body {
