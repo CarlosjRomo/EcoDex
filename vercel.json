@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/trefle/:path*",
+      "destination": "https://trefle.io/:path*"
+    }
+  ]
+}
